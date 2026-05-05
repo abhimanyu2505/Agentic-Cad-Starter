@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# CAD debug artifacts — all .step exports go to outputs/
+*.step
+*.stl
+*.glb
+*.gltf
+
+# Runtime outputs directory (generated at runtime, not committed)
+outputs/
+
+# Memory and kinematic state (runtime data)
+memory_db.json
+kinematic_graph.json
+
+# Streamlit cache
+.streamlit/
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/

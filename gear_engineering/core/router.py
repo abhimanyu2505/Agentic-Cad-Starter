@@ -1,4 +1,5 @@
 from utils.logger import log
+from core.component_registry import get_handler, ComponentValidationError
 import core.parser.gear_parser as gear_parser
 import core.parser.shaft_parser as shaft_parser
 import core.parser.bolt_parser as bolt_parser
@@ -7,12 +8,8 @@ import core.parser.flange_parser as flange_parser
 
 try:
     import cadquery as cq
-    from components.gear.gear_cad import generate_component as generate_gear
-    from components.shaft.shaft_cad import generate_component as generate_shaft
-    from components.bolt.bolt_cad import generate_component as generate_bolt
     from components.plate.plate_cad import generate_component as generate_plate
     from components.flange.flange_cad import generate_component as generate_flange
-    from components.bearing.bearing_cad import generate_component as generate_bearing
     CADQUERY_AVAILABLE = True
 except ImportError:
     CADQUERY_AVAILABLE = False
@@ -21,6 +18,22 @@ def route_node(node: dict, prompt_text: str) -> dict:
     comp_type = node.get("type", node.get("component"))
     params = {}
     solid = None
+
+    handler = get_handler(comp_type)
+    if handler:
+        try:
+            params = handler.prepare(node)
+            if comp_type == "gear" and params.get("face_width") is None:
+                params["face_width"] = 8.0 * float(params["module"])
+            node.update(params)
+            log("router", f"Registry route [{comp_type}]: {params}")
+            if CADQUERY_AVAILABLE:
+                solid = handler.generate(params)
+                node.update(params)
+            node["extracted_parameters"] = params
+            return {"node": node, "solid": solid}
+        except ComponentValidationError:
+            raise
     
     if comp_type == "gear":
         if "module" in node:
@@ -29,7 +42,10 @@ def route_node(node: dict, prompt_text: str) -> dict:
             log("parser", "Falling back to legacy gear parser")
             params = gear_parser.parse_parameters(prompt_text)
         log("router", f"Locked gear scalars natively: {params}")
-        if CADQUERY_AVAILABLE: solid = generate_gear(params)
+        if CADQUERY_AVAILABLE:
+            params.setdefault("face_width", 8.0 * float(params.get("module", 2.0)))
+            from components.gear.gear_cad import generate_component as generate_gear
+            solid = generate_gear(params)
         
     elif comp_type == "shaft":
         if "length" in node:
@@ -38,7 +54,9 @@ def route_node(node: dict, prompt_text: str) -> dict:
             log("parser", "Falling back to legacy shaft parser")
             params = shaft_parser.parse_parameters(prompt_text)
         log("router", f"Locked shaft scalars natively: {params}")
-        if CADQUERY_AVAILABLE: solid = generate_shaft(params)
+        if CADQUERY_AVAILABLE:
+            from components.shaft.shaft_cad import generate_component as generate_shaft
+            solid = generate_shaft(params)
         
     elif comp_type == "bolt":
         if "diameter" in node:
@@ -47,7 +65,9 @@ def route_node(node: dict, prompt_text: str) -> dict:
             log("parser", "Falling back to legacy bolt parser")
             params = bolt_parser.parse_parameters(prompt_text)
         log("router", f"Locked fastener scalars natively: {params}")
-        if CADQUERY_AVAILABLE: solid = generate_bolt(params)
+        if CADQUERY_AVAILABLE:
+            from components.bolt.bolt_cad import generate_component as generate_bolt
+            solid = generate_bolt(params)
         
     elif comp_type == "plate":
         if "length" in node:
@@ -79,7 +99,9 @@ def route_node(node: dict, prompt_text: str) -> dict:
     elif comp_type == "bearing":
         params = {k: v for k, v in node.items() if k not in ["type", "component", "mount_on"]}
         log("router", f"Locked bearing scalars natively: {params}")
-        if CADQUERY_AVAILABLE: solid = generate_bearing(params)
+        if CADQUERY_AVAILABLE:
+            from components.bearing.bearing_cad import generate_component as generate_bearing
+            solid = generate_bearing(params)
         
     elif comp_type == "cone":
         log("router", f"Locked cone scalars natively: {node}")
