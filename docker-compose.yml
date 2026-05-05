@@ -1,0 +1,25 @@
+
+services:
+  gear-generator:
+    build: .
+    # Keep container open interactively if you wish to drop into bash
+    stdin_open: true # equivalent to docker run -i
+    tty: true        # equivalent to docker run -t
+    volumes:
+      # Mounts the current host folder (recursively containing gear_engineering) perfectly to /app
+      - .:/app
+    # The default directory inside the container
+    working_dir: /app
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+
+  agentic-gui:
+    build: .
+    volumes:
+      - .:/app
+    working_dir: /app
+    ports:
+      - "8501:8501"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    command: ["python", "-m", "streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]

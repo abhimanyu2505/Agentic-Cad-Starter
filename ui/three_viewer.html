@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#e8e8e8;overflow:hidden;font-family:'Segoe UI',sans-serif;display:flex;height:100vh;}
+
+/* ── Left Panel ── */
+#panel-left{width:220px;min-width:220px;background:#f5f5f5;border-right:1px solid #ddd;display:flex;flex-direction:column;overflow:hidden;}
+#panel-left h2{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#888;padding:12px 14px 8px;border-bottom:1px solid #e0e0e0;}
+#tree{flex:1;overflow-y:auto;padding:8px 0;}
+.tree-group{margin-bottom:2px;}
+.tree-group-header{
+  display:flex;align-items:center;gap:6px;
+  font-size:11px;font-weight:600;letter-spacing:.04em;color:#555;
+  padding:7px 14px 6px;cursor:pointer;user-select:none;
+  border-bottom:1px solid #e8e8e8;
+  transition:background .12s;
+}
+.tree-group-header:hover{background:#f0f0f0;}
+.grp-icon{font-size:13px;width:18px;text-align:center;}
+.grp-lbl{flex:1;}
+.grp-badge{
+  font-size:10px;font-weight:700;color:#fff;
+  padding:1px 6px;border-radius:10px;min-width:18px;text-align:center;
+}
+.grp-arrow{color:#aaa;font-size:10px;width:10px;}
+.tree-group-body{}
+.tree-item{display:flex;align-items:center;gap:8px;padding:5px 14px;cursor:pointer;border-radius:0;transition:background .15s;}
+.tree-item:hover{background:#e8eaf6;}
+.tree-item.selected{background:#c5cae9;}
+.tree-item input[type=checkbox]{cursor:pointer;accent-color:#5c6bc0;width:13px;height:13px;}
+.tree-item .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+.tree-item .lbl{font-size:12px;color:#333;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+/* ── Center Viewer ── */
+#panel-center{flex:1;position:relative;display:flex;flex-direction:column;}
+#toolbar{height:38px;background:#fff;border-bottom:1px solid #ddd;display:flex;align-items:center;padding:0 10px;gap:6px;flex-shrink:0;}
+#toolbar button{border:1px solid #ddd;background:#fff;border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer;color:#444;transition:all .15s;}
+#toolbar button:hover{background:#e8eaf6;border-color:#9fa8da;}
+#toolbar button.active{background:#5c6bc0;color:#fff;border-color:#3f51b5;}
+#toolbar .sep{width:1px;height:20px;background:#e0e0e0;margin:0 4px;}
+canvas{display:block;width:100%;flex:1;}
+#loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(255,255,255,.92);border-radius:8px;padding:18px 32px;
+  font-size:13px;color:#5c6bc0;letter-spacing:2px;border:1px solid #c5cae9;}
+
+/* ── Right Panel ── */
+#panel-right{width:220px;min-width:220px;background:#f5f5f5;border-left:1px solid #ddd;overflow-y:auto;}
+#panel-right h2{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#888;padding:12px 14px 8px;border-bottom:1px solid #e0e0e0;}
+#props-content{padding:10px 14px;}
+.prop-row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #eee;font-size:12px;}
+.prop-label{color:#999;}
+.prop-value{color:#333;font-family:monospace;font-size:11px;}
+.prop-section{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#aaa;margin:10px 0 4px;}
+#no-selection{color:#bbb;font-size:12px;text-align:center;margin-top:40px;}
+</style>
+</head>
+<body>
+
+<!-- Left: Component Tree -->
+<div id="panel-left">
+  <h2>Components</h2>
+  <div id="tree"></div>
+</div>
+
+<!-- Center: Viewer -->
+<div id="panel-center">
+  <div id="toolbar">
+    <button id="btn-reset" title="Reset camera view">⟳ Reset</button>
+    <button id="btn-wireframe" title="Toggle wireframe">▣ Wire</button>
+    <button id="btn-grid" class="active" title="Toggle grid">⊞ Grid</button>
+    <button id="btn-axes" class="active" title="Toggle axes">⊕ Axes</button>
+    <div class="sep"></div>
+    <button id="btn-screenshot" title="Save screenshot">📷 Screenshot</button>
+    <div class="sep"></div>
+    <button id="btn-explode" title="Toggle exploded view">💥 Explode</button>
+  </div>
+  <canvas id="viewport"></canvas>
+  <div id="loading">LOADING ASSEMBLY…</div>
+</div>
+
+<!-- Right: Properties -->
+<div id="panel-right">
+  <h2>Properties</h2>
+  <div id="props-content">
+    <div id="no-selection">Select a component to view properties</div>
+  </div>
+</div>
+
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
+
+const CONFIG = __CONFIG__;
+
+// ── Renderer ──────────────────────────────────────────────────────────────────
+const canvas   = document.getElementById('viewport');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type    = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace  = THREE.SRGBColorSpace;
+renderer.toneMapping       = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+
+// ── Scene ─────────────────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xeeeeee);
+
+// ── Camera ────────────────────────────────────────────────────────────────────
+const camera = new THREE.PerspectiveCamera(45, 2, 0.1, 50000);
+camera.position.set(0, 200, 400);
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+const controls         = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.screenSpacePanning = true;
+controls.minDistance   = 5;
+controls.maxDistance   = 20000;
+
+// ── Lights ────────────────────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0xffffff, 1.5));  // strong ambient so colors show
+
+const key = new THREE.DirectionalLight(0xffffff, 1.2);
+key.position.set(300, 500, 300);
+key.castShadow = true;
+key.shadow.mapSize.set(2048,2048);
+scene.add(key);
+
+const fill = new THREE.DirectionalLight(0xffffff, 0.8);
+fill.position.set(-200, 300, -200);
+scene.add(fill);
+
+const back = new THREE.DirectionalLight(0xffffff, 0.4);
+back.position.set(0, -200, -400);
+scene.add(back);
+
+// ── Grid + Axes ───────────────────────────────────────────────────────────────
+const grid = new THREE.GridHelper(2000, 80, 0xcccccc, 0xe0e0e0);
+scene.add(grid);
+
+const axes = new THREE.AxesHelper(80);
+scene.add(axes);
+
+// ── Component Colors ──────────────────────────────────────────────────────────
+const TYPE_COLOR_HEX = {
+  gear:    0xe53935,
+  shaft:   0x90a4ae,
+  bearing: 0xff6f00,
+  housing: 0x546e7a,
+  flange:  0x1976d2,
+  bolt:    0x6d4c41,
+  nut:     0x8d6e63,
+  coupling:0x7b1fa2,
+  bracket: 0x00695c,
+  plate:   0x2e7d32,
+  cylinder:0x0097a7,
+  box:     0xf57c00,
+  cone:    0xc62828,
+  sphere:  0x4527a0,
+};
+
+// MeshPhongMaterial — guaranteed visible color without environment map
+function makeMat(type, wireframe=false, opacity=1.0) {
+  const isHousing = type === 'housing';
+  const col = TYPE_COLOR_HEX[type] || 0x9e9e9e;
+  return new THREE.MeshPhongMaterial({
+    color:      col,
+    specular:   0x222222,
+    shininess:  ['shaft','bearing','bolt','nut'].includes(type) ? 60 : 20,
+    transparent: isHousing || opacity < 1,
+    opacity:    isHousing ? 0.35 : opacity,
+    wireframe,
+    depthWrite: !isHousing,
+    side:       THREE.DoubleSide,
+  });
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+const compMeshes = {};   // id → { group, meshes[], edgeLines[], type, mat }
+let   selectedId = null;
+let   globalWire = false;
+const sceneBox   = new THREE.Box3();
+
+// ── Raycaster for selection ───────────────────────────────────────────────────
+const raycaster = new THREE.Raycaster();
+const mouse     = new THREE.Vector2();
+
+// ── Load GLB per component ────────────────────────────────────────────────────
+const loader  = new GLTFLoader();
+let loaded = 0;
+const total  = CONFIG.components.filter(c => c.visible && c.glb_b64).length || 0;
+
+if (total === 0) document.getElementById('loading').textContent = 'NO GEOMETRY';
+
+CONFIG.components.forEach(comp => {
+  if (!comp.visible || !comp.glb_b64) return;
+
+  const bytes = Uint8Array.from(atob(comp.glb_b64), c => c.charCodeAt(0)).buffer;
+  const mat   = makeMat(comp.type, false, comp.opacity);
+  const group = new THREE.Group();
+  group.name  = comp.id;
+  scene.add(group);
+
+  const meshList  = [];
+  const edgeList  = [];
+
+  loader.parse(bytes, '', gltf => {
+    gltf.scene.traverse(child => {
+      if (!child.isMesh) return;
+      // Force override any embedded GLB material with our color system
+      child.material = mat.clone();
+      child.castShadow    = true;
+      child.receiveShadow = true;
+      group.add(child.clone());
+      meshList.push(child);
+      sceneBox.expandByObject(child);
+
+      // Edges
+      const edges = new THREE.EdgesGeometry(child.geometry, 20);
+      const line  = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({color:0x444444, transparent:true, opacity:0.2}));
+      group.add(line);
+      edgeList.push(line);
+    });
+
+    // Store original world position for explode/reset
+    group.userData.origPos = group.position.clone();
+
+    compMeshes[comp.id] = { group, meshList, edgeList, type: comp.type, mat, comp };
+    loaded++;
+    if (loaded >= total) onAllLoaded();
+  }, err => { console.error(comp.id, err); loaded++; if (loaded >= total) onAllLoaded(); });
+});
+
+function onAllLoaded() {
+  document.getElementById('loading').style.display = 'none';
+  fitCamera();
+  buildTree();
+}
+
+function fitCamera() {
+  if (sceneBox.isEmpty()) return;
+  const center  = new THREE.Vector3();
+  const size    = new THREE.Vector3();
+  sceneBox.getCenter(center);
+  sceneBox.getSize(size);
+  const maxDim  = Math.max(size.x, size.y, size.z);
+  const dist    = maxDim * 1.8;
+  camera.position.set(center.x + dist*0.7, center.y + dist*0.5, center.z + dist);
+  camera.near   = maxDim * 0.001;
+  camera.far    = maxDim * 100;
+  camera.updateProjectionMatrix();
+  controls.target.copy(center);
+  grid.position.y = sceneBox.min.y;
+  controls.update();
+}
+
+// ── Component Tree ────────────────────────────────────────────────────────────
+const TYPE_ORDER  = ['gear','shaft','bearing','flange','plate','housing','bolt','nut','coupling','bracket','cylinder','box','cone','sphere'];
+const TYPE_ICON   = {gear:'⚙️',shaft:'🔩',bearing:'🔘',housing:'🏠',flange:'🔲',bolt:'🔩',nut:'🔩',coupling:'🔗',bracket:'📐',plate:'▭',cylinder:'⭕',box:'📦',cone:'△',sphere:'●'};
+const TYPE_HEX    = {gear:'#e53935',shaft:'#bdbdbd',bearing:'#fb8c00',housing:'#78909c',flange:'#42a5f5',bolt:'#8d6e63',nut:'#a1887f',coupling:'#ab47bc',bracket:'#26a69a',plate:'#66bb6a',cylinder:'#26c6da',box:'#ffa726',cone:'#ef5350',sphere:'#7e57c2'};
+const TYPE_LABEL  = {gear:'Gears',shaft:'Shafts',bearing:'Bearings',housing:'Housing',flange:'Flanges',bolt:'Bolts',nut:'Nuts',coupling:'Couplings',bracket:'Brackets',plate:'Plates',cylinder:'Cylinders',box:'Boxes',cone:'Cones',sphere:'Spheres'};
+
+function buildTree() {
+  const treeEl = document.getElementById('tree');
+  treeEl.innerHTML = '';
+
+  const groups = {};
+  CONFIG.components.forEach(c => {
+    if (!c.glb_b64) return;
+    (groups[c.type] = groups[c.type] || []).push(c);
+  });
+
+  TYPE_ORDER.forEach(type => {
+    if (!groups[type]) return;
+    const items = groups[type];
+    const color = TYPE_HEX[type] || '#888';
+    const label = TYPE_LABEL[type] || type.toUpperCase() + 'S';
+
+    const grp = document.createElement('div');
+    grp.className = 'tree-group';
+
+    // Collapsible header with count badge
+    const hdr = document.createElement('div');
+    hdr.className = 'tree-group-header';
+    hdr.innerHTML = `
+      <span class="grp-icon">${TYPE_ICON[type]||'◆'}</span>
+      <span class="grp-lbl">${label}</span>
+      <span class="grp-badge" style="background:${color}">${items.length}</span>
+      <span class="grp-arrow">▾</span>`;
+    hdr.style.cursor = 'pointer';
+    let collapsed = false;
+    hdr.addEventListener('click', () => {
+      collapsed = !collapsed;
+      body.style.display = collapsed ? 'none' : '';
+      hdr.querySelector('.grp-arrow').textContent = collapsed ? '▸' : '▾';
+    });
+    grp.appendChild(hdr);
+
+    const body = document.createElement('div');
+    body.className = 'tree-group-body';
+    items.forEach(comp => {
+      const item = document.createElement('div');
+      item.className = 'tree-item';
+      item.dataset.id = comp.id;
+      item.innerHTML = `
+        <input type="checkbox" id="chk_${comp.id}" checked data-compid="${comp.id}"/>
+        <span class="dot" style="background:${color};border-radius:3px;"></span>
+        <span class="lbl" title="${comp.id}">${comp.id}</span>`;
+      item.querySelector('input').addEventListener('change', e => {
+        e.stopPropagation();
+        const visible = e.target.checked;
+        if (compMeshes[comp.id]) compMeshes[comp.id].group.visible = visible;
+      });
+      item.addEventListener('click', evt => {
+        if (evt.target.tagName === 'INPUT') return;
+        selectComponent(comp.id);
+      });
+      body.appendChild(item);
+    });
+    grp.appendChild(body);
+    treeEl.appendChild(grp);
+  });
+}
+
+// ── Selection ─────────────────────────────────────────────────────────────────
+function setEmissive(group, hexColor) {
+  group.traverse(c => {
+    if (c.isMesh && c.material && c.material.emissive)
+      c.material.emissive.setHex(hexColor);
+  });
+}
+function setOpacity(group, opacity, transparent) {
+  group.traverse(c => {
+    if (c.isMesh && c.material) {
+      c.material.transparent = transparent;
+      c.material.opacity = opacity;
+      c.material.needsUpdate = true;
+    }
+  });
+}
+
+function selectComponent(id) {
+  // Restore all
+  Object.entries(compMeshes).forEach(([, d]) => {
+    setEmissive(d.group, 0x000000);
+    setOpacity(d.group, d.comp.type === 'housing' ? 0.35 : 1.0, d.comp.type === 'housing');
+  });
+  document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
+
+  if (!id || !compMeshes[id] || id === selectedId) {
+    selectedId = null;
+    showProps(null);
+    return;
+  }
+
+  selectedId = id;
+  setEmissive(compMeshes[id].group, 0x1a3a6a);    // blue highlight on selected
+
+  // Dim all others to 18%
+  Object.entries(compMeshes).forEach(([cid, d]) => {
+    if (cid === id) return;
+    setOpacity(d.group, 0.18, true);
+  });
+
+  const treeItem = document.querySelector(`.tree-item[data-id="${id}"]`);
+  if (treeItem) treeItem.classList.add('selected');
+  showProps(id);
+}
+
+function showProps(id) {
+  const el = document.getElementById('props-content');
+  if (!id) { el.innerHTML = '<div id="no-selection">Select a component to view properties</div>'; return; }
+  const data = compMeshes[id];
+  if (!data) return;
+  const comp = data.comp;
+  let verts = 0, tris = 0;
+  data.group.traverse(c => {
+    if (c.isMesh && c.geometry) {
+      const pos = c.geometry.attributes.position;
+      if (pos) verts += pos.count;
+      const idx = c.geometry.index;
+      tris += idx ? idx.count/3 : (pos ? pos.count/3 : 0);
+    }
+  });
+  const bb   = new THREE.Box3().setFromObject(data.group);
+  const size = new THREE.Vector3(); bb.getSize(size);
+  el.innerHTML = `
+    <div class="prop-section">Identity</div>
+    <div class="prop-row"><span class="prop-label">ID</span><span class="prop-value">${comp.id}</span></div>
+    <div class="prop-row"><span class="prop-label">Type</span><span class="prop-value">${comp.type}</span></div>
+    <div class="prop-section">Mesh</div>
+    <div class="prop-row"><span class="prop-label">Vertices</span><span class="prop-value">${verts.toLocaleString()}</span></div>
+    <div class="prop-row"><span class="prop-label">Triangles</span><span class="prop-value">${Math.round(tris).toLocaleString()}</span></div>
+    <div class="prop-section">Bounding Box</div>
+    <div class="prop-row"><span class="prop-label">X</span><span class="prop-value">${size.x.toFixed(2)} mm</span></div>
+    <div class="prop-row"><span class="prop-label">Y</span><span class="prop-value">${size.y.toFixed(2)} mm</span></div>
+    <div class="prop-row"><span class="prop-label">Z</span><span class="prop-value">${size.z.toFixed(2)} mm</span></div>`;
+}
+
+// ── Canvas pick ───────────────────────────────────────────────────────────────
+renderer.domElement.addEventListener('click', evt => {
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((evt.clientX - rect.left) / rect.width)  * 2 - 1;
+  mouse.y =-((evt.clientY - rect.top)  / rect.height) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  const allMeshes = [];
+  Object.values(compMeshes).forEach(d => d.group.traverse(c => { if(c.isMesh) allMeshes.push(c); }));
+  const hits = raycaster.intersectObjects(allMeshes);
+  if (!hits.length) { selectComponent(null); return; }
+  const hit = hits[0].object;
+  const found = Object.keys(compMeshes).find(id => {
+    let inside = false;
+    compMeshes[id].group.traverse(c => { if(c === hit) inside = true; });
+    return inside;
+  });
+  if (found) selectComponent(found);
+});
+
+// ── Toolbar ───────────────────────────────────────────────────────────────────
+document.getElementById('btn-reset').addEventListener('click', fitCamera);
+
+document.getElementById('btn-wireframe').addEventListener('click', function() {
+  globalWire = !globalWire;
+  this.classList.toggle('active', globalWire);
+  Object.values(compMeshes).forEach(d => {
+    d.group.traverse(c => { if(c.isMesh) c.material.wireframe = globalWire; });
+  });
+});
+
+document.getElementById('btn-grid').addEventListener('click', function() {
+  grid.visible = !grid.visible;
+  this.classList.toggle('active', grid.visible);
+});
+
+document.getElementById('btn-axes').addEventListener('click', function() {
+  axes.visible = !axes.visible;
+  this.classList.toggle('active', axes.visible);
+});
+
+document.getElementById('btn-screenshot').addEventListener('click', () => {
+  renderer.render(scene, camera);
+  const link = document.createElement('a');
+  link.download = 'cad_assembly.png';
+  link.href = renderer.domElement.toDataURL('image/png');
+  link.click();
+});
+
+// ── Exploded View & Animation ──────────────────────────────────────────────────
+let isExploded = false;
+const EXPLODE_FACTOR = 1.8;
+
+document.getElementById('btn-explode').addEventListener('click', function() {
+  isExploded = !isExploded;
+  this.classList.toggle('active', isExploded);
+  this.textContent = isExploded ? '🔄 Reset' : '💥 Explode';
+
+  const center = new THREE.Vector3();
+  sceneBox.getCenter(center);
+
+  Object.values(compMeshes).forEach(d => {
+    const grpCenter = new THREE.Box3().setFromObject(d.group).getCenter(new THREE.Vector3());
+    if (isExploded) {
+      if (!d.group.userData.origPos) d.group.userData.origPos = d.group.position.clone();
+      
+      const dir = grpCenter.clone().sub(center).normalize();
+      const dist = grpCenter.distanceTo(center);
+      
+      // Semantic explosion rules
+      const t = d.comp.type;
+      let targetOffset = dir.multiplyScalar(dist * EXPLODE_FACTOR);
+      
+      if (['shaft', 'gear', 'flange', 'coupling'].includes(t)) {
+        // Axial explosion (Z axis)
+        targetOffset.set(0, 0, dir.z > 0 ? 50 + dist : -50 - dist);
+      } else if (t === 'bearing') {
+        // Radial explosion (X/Y)
+        targetOffset.set(dir.x * (dist + 30), dir.y * (dist + 30), 0);
+      } else if (t === 'housing') {
+        // Outward overall
+        targetOffset.multiplyScalar(1.5);
+      }
+      
+      d.group.userData.targetPos = d.group.userData.origPos.clone().add(targetOffset);
+    } else {
+      if (d.group.userData.origPos) {
+        d.group.userData.targetPos = d.group.userData.origPos.clone();
+      }
+    }
+  });
+});
+
+
+
+// ── Hover highlight ───────────────────────────────────────────────────────────
+let hoveredId = null;
+renderer.domElement.addEventListener('mousemove', evt => {
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((evt.clientX - rect.left) / rect.width)  * 2 - 1;
+  mouse.y =-((evt.clientY - rect.top)  / rect.height) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  const allMeshes = [];
+  Object.values(compMeshes).forEach(d => d.group.traverse(c => { if(c.isMesh) allMeshes.push(c); }));
+  const hits = raycaster.intersectObjects(allMeshes);
+  const newHover = hits.length ? (() => {
+    const hit = hits[0].object;
+    return Object.keys(compMeshes).find(id => {
+      let inside=false; compMeshes[id].group.traverse(c=>{if(c===hit)inside=true;}); return inside;
+    });
+  })() : null;
+
+  if (newHover !== hoveredId) {
+    if (hoveredId && hoveredId !== selectedId && compMeshes[hoveredId]) {
+      setEmissive(compMeshes[hoveredId].group, 0x000000);
+    }
+    hoveredId = newHover;
+    if (hoveredId && hoveredId !== selectedId && compMeshes[hoveredId]) {
+      setEmissive(compMeshes[hoveredId].group, 0x2a2a2a);
+    }
+    renderer.domElement.style.cursor = hoveredId ? 'pointer' : 'default';
+  }
+});
+
+// ── Resize ────────────────────────────────────────────────────────────────────
+function onResize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(onResize).observe(canvas);
+onResize();
+
+// ── Animate ───────────────────────────────────────────────────────────────────
+(function animate() {
+  requestAnimationFrame(animate);
+  
+  // Update positions (Lerp) and Rotations
+  Object.values(compMeshes).forEach(d => {
+    // Lerp towards target position for smooth explode
+    if (d.group.userData.targetPos) {
+      d.group.position.lerp(d.group.userData.targetPos, 0.08);
+    }
+    
+    // Rotate gears and shafts if not exploded
+    if (!isExploded && ['gear', 'shaft'].includes(d.comp.type)) {
+      // Basic constant rotation (ideally we would use kinematic data)
+      d.group.rotateZ(0.01);
+    }
+  });
+
+  controls.update();
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>

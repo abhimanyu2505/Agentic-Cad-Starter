@@ -1,0 +1,43 @@
+{
+  "auto_shaft_8bd775": {
+    "speed_rpm": 0.0,
+    "torque": 0.0,
+    "role": null,
+    "direction": 1,
+    "driven_by": null,
+    "drives": [
+      "gear_s1_driver",
+      "gear_s1_driven",
+      "bearing_auto_shaft_8bd775_1",
+      "bearing_auto_shaft_8bd775_1",
+      "bearing_auto_shaft_8bd775_1",
+      "bearing_auto_shaft_8bd775_1",
+      "bearing_auto_shaft_8bd775_1",
+      "bearing_auto_shaft_8bd775_1"
+    ]
+  },
+  "gear_s1_driver": {
+    "speed_rpm": 0.0,
+    "torque": 0.0,
+    "role": "input",
+    "direction": 1,
+    "driven_by": "auto_shaft_8bd775",
+    "drives": []
+  },
+  "gear_s1_driven": {
+    "speed_rpm": 0.0,
+    "torque": 0.0,
+    "role": "output",
+    "direction": 1,
+    "driven_by": "auto_shaft_8bd775",
+    "drives": []
+  },
+  "bearing_auto_shaft_8bd775_1": {
+    "speed_rpm": 0.0,
+    "torque": 0.0,
+    "role": null,
+    "direction": 1,
+    "driven_by": "auto_shaft_8bd775",
+    "drives": []
+  }
+}
