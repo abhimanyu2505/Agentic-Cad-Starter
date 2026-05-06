@@ -25,12 +25,12 @@ $env:OPENAI_API_KEY="sk-your-api-key"
 ```
 
 ### 2. Build and Run the Environment
-The project now runs as a multi-container Docker environment. The core CAD engine and the interactive Streamlit GUI are run in parallel.
+The project runs as a multi-container Docker environment with a FastAPI backend and React frontend.
 ```bash
-# To start the Streamlit GUI and the CLI services:
+# Start both backend and frontend services:
 docker-compose up --build
 ```
-*Note: The `agentic-gui` service will host the web interface at `http://localhost:8501`. The `gear-generator` service will still drop you into an interactive CLI prompt if you run it explicitly (`docker-compose run --rm -it gear-generator python gear_engineering/main_pipeline.py`).*
+*The backend API will be available at `http://localhost:8000` and the React frontend at `http://localhost:5173`.*
 
 ### 3. Usage Examples
 When prompted, try typing natural language requests:
@@ -44,7 +44,24 @@ The AI will parse your request, run it through the Design Intelligence validatio
 The generated mechanical assembly is saved directly to your host machine in the `outputs/` directory as `agentic_assembly_output.step`. Additionally, individual `.stl` files for gears, shafts, bearings, and the housing are exported there for the GUI to render. Open these files in FreeCAD, Fusion360, or any STEP/STL viewer.
 
 ## Architecture Notes
-- **`core/llm_client.py`:** Holds the Pydantic schemas and talks to OpenAI.
-- **`core/design_intelligence.py`:** Enforces engineering rules.
-- **`core/memory.py`:** Manages the `memory_db.json` local cache.
-- **`components/` & `assembly/`:** The unchanged deterministic geometry core.
+
+### Backend (FastAPI)
+- **`backend/app/main.py`:** FastAPI server with endpoints:
+  - `POST /generate` - Generate new CAD components from natural language
+  - `POST /modify` - Modify existing component parameters
+  - `GET /state` - Retrieve current design state
+  - `GET /outputs/{file}` - Serve generated GLB/STL files
+- **`backend/app/session.py`:** Manages design session state and pipeline integration
+- **`gear_engineering/main_pipeline.py`:** Core CAD generation pipeline
+- **`core/llm_client.py`:** Pydantic schemas and OpenAI integration
+- **`core/design_intelligence.py`:** Engineering validation rules
+- **`core/memory.py`:** Local design cache (`memory_db.json`)
+- **`components/` & `assembly/`:** Deterministic CAD geometry generators
+
+### Frontend (React + Three.js)
+- **`frontend/src/App.jsx`:** Main UI with 3-panel layout:
+  - Left: Chat interface for natural language input
+  - Center: 3D viewer (React Three Fiber)
+  - Right: Component inspector and parameter editor
+- **`frontend/src/api.js`:** API client for backend communication
+- **`frontend/src/styles.css`:** Modern, responsive styling

@@ -16,7 +16,10 @@ Delta format (from LLM):
 import uuid
 import copy
 from typing import Dict, List, Optional
-from utils.logger import log
+try:
+    from gear_engineering.utils.logger import log
+except ImportError:
+    from utils.logger import log
 
 
 # ---------------------------------------------------------------------------
@@ -36,11 +39,10 @@ def apply_delta(previous_state: dict, delta: dict) -> dict:
     delta_comps = delta.get("components", [])
     delta_rels  = delta.get("relationships", [])
 
-    # Ensure all delta components have unique IDs, non-conflicting with existing
-    existing_ids = {c["id"] for c in state.get("components", []) if "id" in c}
-    delta_comps  = _ensure_unique_ids(delta_comps, existing_ids)
-
     if action == "add":
+        # New components must not collide; modify/remove must keep target IDs intact.
+        existing_ids = {c["id"] for c in state.get("components", []) if "id" in c}
+        delta_comps = _ensure_unique_ids(delta_comps, existing_ids)
         state = _merge_add(state, delta_comps, delta_rels)
     elif action == "modify":
         state = _merge_modify(state, delta_comps, delta_rels)

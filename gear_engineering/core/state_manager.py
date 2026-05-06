@@ -35,6 +35,15 @@ _EMPTY: Dict[str, Any] = {
 _MAX_HISTORY_FOR_LLM = 6  # Number of chat turns (user+assistant pairs) sent to LLM
 
 
+def init_task_state() -> dict:
+    """Return a fresh, empty task state for the conversation engine."""
+    return {
+        "type":       None,
+        "parameters": {},
+        "status":     "incomplete",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -138,9 +147,21 @@ def set_current_task(
     parameters : partial or full parameter dict extracted so far.
     status     : 'incomplete' or 'complete'. Defaults from confirmed.
     """
+    base_parameters = {}
+    try:
+        try:
+            from gear_engineering.core.component_schemas import COMPONENT_SCHEMAS
+        except ImportError:
+            from core.component_schemas import COMPONENT_SCHEMAS
+        schema = COMPONENT_SCHEMAS.get(task_type, {})
+        base_parameters = {field: None for field in schema.get("required", [])}
+    except Exception:
+        base_parameters = {}
+    base_parameters.update(copy.deepcopy(parameters or {}))
+
     state["current_task"] = {
         "type":       task_type,
-        "parameters": copy.deepcopy(parameters or {}),
+        "parameters": base_parameters,
         "missing":    list(missing or []),
         "status":     status or ("complete" if confirmed else "incomplete"),
         "confirmed":  confirmed,

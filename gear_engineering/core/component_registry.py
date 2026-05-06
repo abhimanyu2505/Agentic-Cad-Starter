@@ -35,7 +35,7 @@ class ComponentHandler:
     def prepare(self, node: Dict[str, Any]) -> Dict[str, Any]:
         params = {
             k: v for k, v in node.items()
-            if k not in ("type", "component", "mount_on", "extracted_parameters")
+            if k not in ("id", "type", "component", "mount_on", "extracted_parameters")
         }
         clean = self.apply_defaults(params)
         missing = [field for field in self.required if clean.get(field) is None]
@@ -62,8 +62,8 @@ def _validate_gear(params: Dict[str, Any]) -> None:
     if params.get("face_width") is None:
         params["face_width"] = 8.0 * float(params["module"])
     _validate_positive(params, ["module", "face_width"])
-    if int(params["teeth"]) < 12:
-        raise ComponentValidationError("gear teeth must be 12 or greater.")
+    if int(params["teeth"]) < 6:
+        raise ComponentValidationError("gear teeth must be 6 or greater for mechanical stability.")
     if not 14.0 <= float(params.get("pressure_angle", 20.0)) <= 25.0:
         raise ComponentValidationError("pressure_angle must be between 14 and 25 degrees.")
     params["teeth"] = int(params["teeth"])
@@ -85,6 +85,12 @@ def _validate_bearing(params: Dict[str, Any]) -> None:
         raise ComponentValidationError("bearing inner_diameter must be less than outer_diameter.")
 
 
+def _validate_nut(params: Dict[str, Any]) -> None:
+    _validate_positive(params, ["diameter", "pitch"])
+    if str(params["thread_type"]).upper() not in ("M", "UNC", "UNF"):
+        raise ComponentValidationError("thread_type must be M, UNC, or UNF.")
+
+
 def _validate_housing(params: Dict[str, Any]) -> None:
     _validate_positive(params, ["length", "width", "height", "wall_thickness"])
 
@@ -99,10 +105,24 @@ def _validate_plate(params: Dict[str, Any]) -> None:
         _validate_positive(params, ["thickness"])
 
 
+def _validate_bracket(params: Dict[str, Any]) -> None:
+    _validate_positive(params, ["length", "width", "height", "thickness"])
+
+
 def _validate_cylinder(params: Dict[str, Any]) -> None:
     if params.get("diameter") is not None and params.get("radius") is None:
         params["radius"] = float(params["diameter"]) / 2.0
     _validate_positive(params, ["radius", "height"])
+
+
+def _validate_gearbox(params: Dict[str, Any]) -> None:
+    _validate_positive(params, ["target_ratio"])
+
+
+def _no_geometry(params: Dict[str, Any]):
+    raise ComponentValidationError(
+        "gearbox is a synthesis task, not a standalone component generator."
+    )
 
 
 COMPONENT_REGISTRY: Dict[str, ComponentHandler] = {
@@ -134,12 +154,26 @@ COMPONENT_REGISTRY: Dict[str, ComponentHandler] = {
         validate=_validate_bearing,
         generator_path="components.bearing.bearing_cad:generate_component",
     ),
+    "nut": ComponentHandler(
+        component_type="nut",
+        required=["diameter", "thread_type", "pitch"],
+        defaults={"thread_type": "M"},
+        validate=_validate_nut,
+        generator_path="components.nut.nut_cad:generate_component",
+    ),
     "housing": ComponentHandler(
         component_type="housing",
         required=["length", "width", "height"],
         defaults={"wall_thickness": 5.0},
         validate=_validate_housing,
         generator_path="components.housing.housing_cad:generate_component",
+    ),
+    "gearbox": ComponentHandler(
+        component_type="gearbox",
+        required=["target_ratio"],
+        defaults={"input_speed_rpm": 1500.0, "input_torque": 1.0, "max_stages": 3},
+        validate=_validate_gearbox,
+        generator_path="core.component_registry:_no_geometry",
     ),
     "flange": ComponentHandler(
         component_type="flange",
@@ -154,6 +188,20 @@ COMPONENT_REGISTRY: Dict[str, ComponentHandler] = {
         defaults={"thickness": 5.0},
         validate=_validate_plate,
         generator_path="components.plate.plate_cad:generate_component",
+    ),
+    "coupling": ComponentHandler(
+        component_type="coupling",
+        required=["length", "diameter"],
+        defaults={},
+        validate=_validate_shaft,
+        generator_path="components.coupling.coupling_cad:generate_component",
+    ),
+    "bracket": ComponentHandler(
+        component_type="bracket",
+        required=["length", "width", "height"],
+        defaults={"thickness": 5.0},
+        validate=_validate_bracket,
+        generator_path="components.bracket.bracket_cad:generate_component",
     ),
     "cylinder": ComponentHandler(
         component_type="cylinder",
@@ -170,3 +218,100 @@ REGISTRY = COMPONENT_REGISTRY
 def get_handler(component_type: str) -> Optional[ComponentHandler]:
     """Return the deterministic handler for a component type, if registered."""
     return COMPONENT_REGISTRY.get(component_type)
+
+
+# ---------------------------------------------------------------------------
+# Conversation-flow schemas (question engine — zero LLM dependency)
+# ---------------------------------------------------------------------------
+
+CONVERSATION_SCHEMAS: Dict[str, Dict] = {
+    "gear": {
+        "required": ["gear_type", "module", "teeth", "face_width"],
+        "questions": {
+            "gear_type": "What type of gear? (spur / helical)",
+            "module":    "What module should I use? (e.g. 1.0, 2.0, 3.0)",
+            "teeth":     "How many teeth?",
+            "face_width": "What face width in mm?",
+        },
+    },
+    "shaft": {
+        "required": ["length", "diameter"],
+        "questions": {
+            "length":   "What shaft length in mm?",
+            "diameter": "What shaft diameter in mm?",
+        },
+    },
+    "bolt": {
+        "required": ["diameter", "length", "thread_type"],
+        "questions": {
+            "diameter":    "What bolt diameter? (e.g. 6 for M6, 8 for M8)",
+            "length":      "What bolt length in mm?",
+            "thread_type": "What thread type? (coarse / fine)",
+        },
+    },
+    "bearing": {
+        "required": ["inner_diameter", "outer_diameter", "width"],
+        "questions": {
+            "inner_diameter": "What inner diameter in mm?",
+            "outer_diameter": "What outer diameter in mm?",
+            "width":          "What bearing width in mm?",
+        },
+    },
+    "flange": {
+        "required": ["diameter", "thickness"],
+        "questions": {
+            "diameter":  "What outside diameter in mm?",
+            "thickness": "What flange thickness in mm?",
+        },
+    },
+    "gearbox": {
+        "required": ["target_ratio"],
+        "questions": {
+            "target_ratio": "What target gear ratio? (e.g. 4 for 4:1)",
+        },
+    },
+    "plate": {
+        "required": ["length", "width"],
+        "questions": {
+            "length": "What plate length in mm?",
+            "width":  "What plate width in mm?",
+        },
+    },
+    "housing": {
+        "required": ["length", "width", "height"],
+        "questions": {
+            "length": "What housing length in mm?",
+            "width":  "What housing width in mm?",
+            "height": "What housing height in mm?",
+        },
+    },
+    "coupling": {
+        "required": ["length", "diameter"],
+        "questions": {
+            "length":   "What coupling length in mm?",
+            "diameter": "What coupling outside diameter in mm?",
+        },
+    },
+    "bracket": {
+        "required": ["length", "width", "height"],
+        "questions": {
+            "length": "What bracket length in mm?",
+            "width":  "What bracket width in mm?",
+            "height": "What bracket height in mm?",
+        },
+    },
+    "cylinder": {
+        "required": ["radius", "height"],
+        "questions": {
+            "radius": "What cylinder radius in mm?",
+            "height": "What cylinder height in mm?",
+        },
+    },
+    "nut": {
+        "required": ["diameter", "thread_type"],
+        "questions": {
+            "diameter":    "What nut nominal diameter in mm?",
+            "thread_type": "What thread type? (coarse / fine)",
+        },
+    },
+}

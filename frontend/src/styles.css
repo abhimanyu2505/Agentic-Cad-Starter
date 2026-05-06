@@ -1,0 +1,392 @@
+:root {
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  color: #18212b;
+  background:
+    radial-gradient(circle at top left, #dceeff, transparent 35%),
+    linear-gradient(180deg, #f7fafc 0%, #eef3f7 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 320px;
+  min-height: 100vh;
+}
+
+.panel,
+.viewer-panel {
+  min-height: 100vh;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(16px);
+  border-right: 1px solid #dbe3ea;
+}
+
+.panel-right {
+  border-right: 0;
+  border-left: 1px solid #dbe3ea;
+}
+
+.panel-header,
+.viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px;
+  border-bottom: 1px solid #dbe3ea;
+  gap: 20px;
+}
+
+.viewer-controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.control-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: #52606d;
+}
+
+.control-item span {
+  font-weight: 600;
+  min-width: 60px;
+}
+
+.control-item input[type="range"] {
+  width: 120px;
+  height: 4px;
+  border-radius: 2px;
+  background: #dbe3ea;
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.control-item input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #0d6e6e;
+  cursor: pointer;
+}
+
+.control-item input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #0d6e6e;
+  cursor: pointer;
+  border: none;
+}
+
+.control-item input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #0d6e6e;
+}
+
+.export-button {
+  padding: 8px 16px;
+  background: #135f98;
+  color: white;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.2s;
+}
+
+.export-button:hover {
+  background: #0d4a75;
+}
+
+.icon-button {
+  padding: 8px 12px;
+  background: white;
+  border: 1px solid #dbe3ea;
+  border-radius: 8px;
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-button:hover {
+  background: #f7fafc;
+  border-color: #0d6e6e;
+  transform: scale(1.05);
+}
+
+.panel-header h1,
+.panel-header h2,
+.viewer-header h2 {
+  margin: 4px 0 0;
+  font-size: 1.1rem;
+}
+
+.eyebrow {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6f7b88;
+  font-weight: 700;
+}
+
+.pill {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #e7f0fa;
+  color: #135f98;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.chat-messages,
+.panel-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+}
+
+.chat-form {
+  padding: 16px;
+  border-top: 1px solid #dbe3ea;
+  display: grid;
+  gap: 8px;
+}
+
+.form-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.keyboard-hint {
+  font-size: 0.72rem;
+  color: #6f7b88;
+  font-style: italic;
+}
+
+.chat-form textarea,
+.chat-form button,
+.field input,
+.field select {
+  font: inherit;
+}
+
+.chat-form textarea,
+.field input,
+.field select {
+  width: 100%;
+  border: 1px solid #cad5df;
+  border-radius: 12px;
+  padding: 12px;
+  background: #fbfdff;
+}
+
+.chat-form button {
+  border: 0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #0d6e6e;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.chat-form button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.apply-button {
+  border: 0;
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: #135f98;
+  color: white;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.apply-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.message {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.message-user {
+  background: #0d6e6e;
+  color: white;
+  margin-left: 28px;
+}
+
+.message-assistant {
+  background: white;
+  border: 1px solid #dbe3ea;
+  margin-right: 28px;
+}
+
+.message-error {
+  background: #fff0ee;
+  color: #a03c2e;
+  border: 1px solid #f1c8c1;
+}
+
+.viewer-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.viewer-frame {
+  flex: 1;
+  padding: 18px;
+}
+
+.viewer-frame canvas,
+.viewer-empty {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border-radius: 20px;
+  background: linear-gradient(180deg, #fbfdff 0%, #eef4f8 100%);
+  box-shadow: inset 0 0 0 1px #d8e2eb;
+}
+
+.viewer-empty {
+  display: grid;
+  place-items: center;
+  color: #71808e;
+  font-weight: 600;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.field span {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: #52606d;
+}
+
+.component-meta {
+  padding: 14px;
+  border: 1px solid #dbe3ea;
+  border-radius: 14px;
+  background: white;
+  margin-bottom: 16px;
+}
+
+.component-name {
+  font-weight: 800;
+}
+
+.component-type {
+  margin-top: 6px;
+  color: #6f7b88;
+  text-transform: uppercase;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+}
+
+.property-list {
+  display: grid;
+  gap: 10px;
+}
+
+.property-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #edf2f7;
+  font-size: 0.92rem;
+}
+
+.property-row span:last-child {
+  color: #405162;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.editor-block {
+  margin-top: 24px;
+}
+
+.editor-title {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6f7b88;
+  font-weight: 800;
+  margin-bottom: 12px;
+}
+
+.empty-copy {
+  color: #71808e;
+  line-height: 1.5;
+}
+
+@media (max-width: 1100px) {
+  .app-shell {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+
+  .panel-right {
+    grid-column: 1 / -1;
+    min-height: 360px;
+    border-left: 0;
+    border-top: 1px solid #dbe3ea;
+  }
+}
+
+@media (max-width: 800px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .panel,
+  .viewer-panel,
+  .panel-right {
+    min-height: 420px;
+  }
+}

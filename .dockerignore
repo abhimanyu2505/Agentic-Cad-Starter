@@ -1,0 +1,17 @@
+.git
+.pytest_cache
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.step
+*.stp
+*.stl
+*.glb
+outputs/
+memory_db.json
+.env
+gear_engineering/.env
+frontend/node_modules
+frontend/dist
+backend/__pycache__

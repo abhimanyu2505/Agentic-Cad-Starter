@@ -135,8 +135,8 @@ class TestGearboxRouting:
         with patch("gear_engineering.main_pipeline.get_similar_design",
                    return_value={"cached_hits": 0, "plan": None}):
             result = run_agentic_pipeline("I need a gearbox")
-        assert result["status"] == "missing_parameters"
-        assert any("ratio" in f.lower() for f in result["missing_fields"])
+        assert result["status"] == "question"
+        assert any("ratio" in f.lower() for f in result["missing"])
 
 
 # ---------------------------------------------------------------------------
@@ -154,14 +154,12 @@ class TestParameterCompletionFlow:
             missing_fields=["module", "teeth"],
         )
         result = run_agentic_pipeline("Create a gear with 20 teeth")
-        assert result["status"] == "missing_parameters"
-        assert "module" in result["missing_fields"]
-        assert "guidance" in result  # guidance message now included
+        assert result["status"] == "question"
+        assert "module" in result["missing"]
+        assert "question" in result
 
-    @patch("core.llm_client.extract_parameters")
     @patch("gear_engineering.main_pipeline.recompile_assembly")
-    def test_completion_path_merges_intent(self, mock_recompile, mock_extract):
-        mock_extract.return_value  = {"module": 2.5, "teeth": 35}
+    def test_completion_path_merges_intent(self, mock_recompile):
         mock_recompile.return_value = {"status": "success", "components": []}
 
         last_intent = {"type": "gear", "id": "gear_1"}
@@ -171,12 +169,6 @@ class TestParameterCompletionFlow:
             last_failed_intent=last_intent,
         )
         assert result["status"] == "success"
-        # extract_parameters must have been called with the right fields
-        mock_extract.assert_called_once()
-        _, kwargs_or_args = mock_extract.call_args
-        # Second positional arg or 'missing_fields' kwarg should include our fields
-        call_args = mock_extract.call_args[0]
-        assert "module" in call_args[1] or "module" in str(call_args)
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +196,7 @@ class TestContinuationFlow:
         mock_recompile.return_value = {"status": "success", "components": []}
 
         result = run_agentic_pipeline(
-            "Add a gear to the shaft",
+            "Add a module 2 gear with 20 teeth to the shaft",
             previous_state=previous_state,
         )
 

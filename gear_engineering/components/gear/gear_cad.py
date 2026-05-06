@@ -1,87 +1,88 @@
-import math
+"""
+gear_cad.py
+===========
+Real involute gear geometry using cq_gears.
+Supports spur and helical gear types.
+All units in mm. Geometry centred at origin.
+"""
 import cadquery as cq
-from components.gear.tooth import generate_closed_tooth_profile, rotate_point
-from components.gear.gear_math import SpurGearCalculator
+from cq_gears import SpurGear
+
+
+def _as_workplane(solid) -> cq.Workplane:
+    if isinstance(solid, cq.Workplane):
+        return solid
+    return cq.Workplane("XY").add(solid)
+
 
 def generate_component(parameters: dict) -> cq.Workplane:
     """
-    Standardized component generation interface for Gear CAD.
-    Expects params: module, teeth, pressure_angle, face_width.
-    Uses ISO-style spur gear geometry:
-      pitch_diameter = module * teeth
-      outer_diameter = pitch_diameter + 2 * module
-      root_diameter  = pitch_diameter - 2.5 * module
+    Generate a real involute gear using cq_gears.
+
+    Required : module, teeth
+    Optional : gear_type (spur/helical), thickness/face_width,
+               pressure_angle, bore_diameter, keyway
     """
-    module = float(parameters["module"])
-    teeth = int(parameters["teeth"])
+    module         = float(parameters["module"])
+    teeth          = int(parameters["teeth"])
     pressure_angle = float(parameters.get("pressure_angle", 20.0))
-    geom = SpurGearCalculator(module, teeth, pressure_angle).calculate()
-    face_width = float(parameters.get("face_width", parameters.get("thickness", 8.0 * module)))
-    if face_width <= 0:
-        raise ValueError("Gear face_width must be greater than 0.")
+    thickness      = float(
+        parameters.get("thickness", parameters.get("face_width", 8.0 * module))
+    )
+    gear_type      = str(parameters.get("gear_type", "spur")).lower()
 
-    # 1. Generate 2D Profile Points (Resolution 80)
-    single_pitch_wire, _, _ = generate_closed_tooth_profile(module, teeth, pressure_angle, num_points=80)
-    
-    # 2. Build 3D solid via strictly continuous wire tracing
-    continuous_points = []
-    angle_step = 2 * math.pi / teeth
-    for i in range(teeth):
-        # Simply append the pre-calculated pitch wire correctly rotated
-        for x, y in single_pitch_wire:
-            rot_x, rot_y = rotate_point(x, y, i * angle_step)
-            continuous_points.append((rot_x, rot_y))
-            
-    continuous_points.append(continuous_points[0]) # Master closure seal
-        
-    # Extrude exactly as one contiguous Wire
-    try:
-        gear_solid = cq.Workplane("XY").polyline(continuous_points).close().extrude(face_width)
-    except Exception as e:
-        raise ValueError(f"Extrusion failed: Continuous wire boolean trap ({str(e)})")
-    
-    # 3. Optional hub. Minimal mode keeps this absent unless the plan requests it.
+    if module <= 0:
+        raise ValueError("Gear module must be greater than 0.")
+    if thickness <= 0:
+        raise ValueError("Gear thickness must be greater than 0.")
+    if teeth < 6:
+        raise ValueError("Gear teeth must be 6 or greater.")
+
+    # helix_angle adds twist for helical gears; 0 = standard spur
+    helix_angle = 15.0 if gear_type == "helical" else 0.0
+
+    spur_gear = SpurGear(
+        module=module,
+        teeth_number=teeth,
+        width=thickness,
+        pressure_angle=pressure_angle,
+        helix_angle=helix_angle,
+    )
+    gear_solid = _as_workplane(cq.Workplane("XY").gear(spur_gear))
+
+    # Optional bore
     bore_diameter = float(parameters.get("bore_diameter", 0.0))
-    hub_diameter  = float(parameters.get("hub_diameter",  0.0))
-    hub_thickness = float(parameters.get("hub_thickness", 0.0))
-
-    if hub_diameter > 0 and hub_thickness > 0:
-        gear_solid = gear_solid.faces(">Z").workplane().circle(hub_diameter / 2.0).extrude(hub_thickness)
-
-    # 4. Bore cutting (shaft insertion gap)
     if bore_diameter > 0:
-        gear_solid = gear_solid.faces(">Z").workplane().circle(bore_diameter / 2.0).cutThruAll()
+        pitch_diameter = module * teeth
+        if bore_diameter >= pitch_diameter:
+            raise ValueError("bore_diameter must be smaller than pitch diameter.")
+        gear_solid = (
+            gear_solid
+            .faces(">Z").workplane()
+            .circle(bore_diameter / 2.0)
+            .cutThruAll()
+        )
 
-    # 5. Keyway cut inside bore — aligned to +X axis, matching shaft slot
+    # Optional keyway
     if bore_diameter > 0 and parameters.get("keyway", False):
         bore_radius = bore_diameter / 2.0
         key_width   = bore_diameter * 0.25
         key_depth   = bore_diameter * 0.125
-        keyway_gear_tool = (
+        keyway_tool = (
             cq.Workplane("XZ")
-            .center(0, face_width / 2.0)
-            .rect(key_width, face_width + hub_thickness + 1.0)
+            .center(0, thickness / 2.0)
+            .rect(key_width, thickness + 1.0)
             .extrude(key_depth)
             .translate((0, bore_radius, 0))
         )
-        gear_solid = gear_solid.cut(keyway_gear_tool)
+        gear_solid = gear_solid.cut(keyway_tool)
 
-    # 6. Selective edge finishing — hub and bore faces only (avoids teeth kernel faults)
-    try:
-        # Chamfer the circular hub top edge by targeting only continuous circular loops
-        gear_solid = (
-            gear_solid
-            .faces(">Z")
-            .edges("%Circle")
-            .chamfer(0.5)
-        )
-        print("[gear_cad] Hub and bore selective edge finish cleanly applied on >Z terminal face.")
-    except Exception as exc:
-        print(f"[gear_cad] Warning: Selective hub chamfer skipped (kernel topological boundary issue: {exc})")
-
-    parameters.setdefault("pitch_diameter", geom["pitch_diameter"])
-    parameters.setdefault("outer_diameter", geom["outer_diameter"])
-    parameters.setdefault("root_diameter", geom["root_diameter"])
-    parameters.setdefault("face_width", face_width)
+    # Store computed geometry metadata back into params dict
+    pitch_diameter = module * teeth
+    parameters["pitch_diameter"] = pitch_diameter
+    parameters["outer_diameter"] = pitch_diameter + 2.0 * module
+    parameters["root_diameter"]  = pitch_diameter - 2.5 * module
+    parameters["face_width"]     = thickness
+    parameters["thickness"]      = thickness
 
     return gear_solid

@@ -79,6 +79,39 @@ COMPONENT_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "height": "What housing height should I use?",
         },
     },
+    "nut": {
+        "required": ["diameter", "thread_type", "pitch"],
+        "optional": ["thickness"],
+        "questions": {
+            "diameter": "What nut nominal diameter should I use?",
+            "thread_type": "What thread type should I use: M, UNC, or UNF?",
+            "pitch": "What thread pitch should I use?",
+        },
+    },
+    "coupling": {
+        "required": ["length", "diameter"],
+        "optional": ["bore_diameter"],
+        "questions": {
+            "length": "What coupling length should I use in millimeters?",
+            "diameter": "What coupling outside diameter should I use in millimeters?",
+        },
+    },
+    "bracket": {
+        "required": ["length", "width", "height"],
+        "optional": ["thickness"],
+        "questions": {
+            "length": "What bracket length should I use?",
+            "width": "What bracket width should I use?",
+            "height": "What bracket height should I use?",
+        },
+    },
+    "gearbox": {
+        "required": ["target_ratio"],
+        "optional": ["input_speed_rpm", "input_torque", "max_stages"],
+        "questions": {
+            "target_ratio": "What target ratio should the gearbox achieve? For example: 4:1.",
+        },
+    },
 }
 
 
@@ -87,10 +120,13 @@ _COMPONENT_KEYWORDS = {
     "flange": ["flange"],
     "cylinder": ["cylinder", "cylindrical"],
     "housing": ["housing", "case", "enclosure"],
+    "coupling": ["coupling", "coupler"],
+    "bracket": ["bracket", "angle bracket"],
+    "gear": ["gear", "spur gear"],
     "shaft": ["shaft", "axle"],
     "bolt": ["bolt", "screw", "fastener"],
+    "nut": ["nut", "hex nut"],
     "plate": ["plate"],
-    "gear": ["gear", "spur gear"],
 }
 
 
@@ -122,4 +158,3 @@ def question_for(component_type: str, missing: List[str]) -> str:
         return questions.get(missing[0], f"Please provide {missing[0].replace('_', ' ')}.")
     prompts = [questions.get(field, field.replace("_", " ")) for field in missing]
     return " ".join(prompts)
-

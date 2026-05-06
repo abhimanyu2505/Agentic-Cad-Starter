@@ -34,9 +34,211 @@ from core.component_schemas import (
     missing_parameters,
     question_for,
 )
+from core.component_registry import COMPONENT_REGISTRY
 from utils.logger import log
 from core.router import route_node, is_cadquery_available
 from assembly.assembly_builder import build_assembly
+
+
+# ---------------------------------------------------------------------------
+# Deterministic conversation engine (no LLM for flow control)
+# ---------------------------------------------------------------------------
+
+def detect_component_type(prompt: str):
+    """Keyword-based component type detection. No LLM."""
+    p = prompt.lower()
+    if "gearbox" in p or "gear box" in p or "gear ratio" in p: return "gearbox"
+    if "bearing" in p:                                          return "bearing"
+    if "flange" in p:                                           return "flange"
+    if "coupling" in p or "coupler" in p:                       return "coupling"
+    if "bracket" in p:                                          return "bracket"
+    if "housing" in p or "enclosure" in p:                      return "housing"
+    if "bolt" in p or "screw" in p or "fastener" in p:          return "bolt"
+    if "nut" in p and "bolt" not in p:                          return "nut"
+    if "shaft" in p or "axle" in p:                             return "shaft"
+    if "gear" in p:                                             return "gear"
+    if "plate" in p:                                            return "plate"
+    if "cylinder" in p or "cylindrical" in p:                   return "cylinder"
+    return None
+
+
+def extract_parameters(prompt: str) -> dict:
+    """Deterministic regex-based parameter extractor. No LLM."""
+    p = prompt.lower().strip()
+    params: dict = {}
+
+    _named = [
+        (r"inner\s*(?:diameter|dia)[:\s]*([\d.]+)",  "inner_diameter", float),
+        (r"outer\s*(?:diameter|dia)[:\s]*([\d.]+)",  "outer_diameter", float),
+        (r"(?:diameter|dia)[:\s]*([\d.]+)",           "diameter",       float),
+        (r"(?:length|long)[:\s]*([\d.]+)",            "length",         float),
+        (r"(?:width|wide)[:\s]*([\d.]+)",             "width",          float),
+        (r"(?:height|tall)[:\s]*([\d.]+)",            "height",         float),
+        (r"(?:thickness|thick)[:\s]*([\d.]+)",        "thickness",      float),
+        (r"(?:face.?width|face.?w|fw)[:\s]*([\d.]+)", "face_width",     float),
+        (r"radius[:\s]*([\d.]+)",                     "radius",         float),
+        (r"module[:\s]*([\d.]+)",                     "module",         float),
+        (r"pitch[:\s]*([\d.]+)",                      "pitch",          float),
+        (r"(?:teeth|tooth)[:\s]*(\d+)",               "teeth",          int),
+        (r"ratio[:\s]*([\d.]+)",                      "target_ratio",   float),
+        (r"rpm[:\s]*([\d.]+)",                        "input_speed_rpm",float),
+        (r"([\d.]+)\s*:\s*1",                         "target_ratio",   float),
+    ]
+    for pattern, key, cast in _named:
+        m = re.search(pattern, p)
+        if m and key not in params:
+            params[key] = cast(m.group(1))
+
+    # Unit-suffixed bare number fallback - check for mm
+    mm_m = re.search(r"([\d.]+)\s*mm", p)
+    if mm_m:
+        val = float(mm_m.group(1))
+        # If no other params extracted, this is likely the answer to current question
+        if not params:
+            params["_bare"] = val
+        elif "length" not in params and "diameter" not in params and "face_width" not in params:
+            params["length"] = val
+
+    if "spur" in p:    params["gear_type"] = "spur"
+    elif "helical" in p: params["gear_type"] = "helical"
+
+    if "coarse" in p:  params["thread_type"] = "coarse"
+    elif "fine" in p:  params["thread_type"] = "fine"
+
+    m_bolt = re.search(r"\bm(\d+)\b", p)
+    if m_bolt and "diameter" not in params:
+        params["diameter"] = float(m_bolt.group(1))
+        params.setdefault("thread_type", "coarse")
+
+    # Single bare number — tag for caller to map to next missing field
+    if not params:
+        bare = re.findall(r"\b([\d.]+)\b", p)
+        if len(bare) == 1:
+            params["_bare"] = float(bare[0])
+
+    return params
+
+
+def get_next_question(task: dict):
+    """Return next question dict for first missing required param, or None."""
+    from core.component_registry import CONVERSATION_SCHEMAS
+    schema = CONVERSATION_SCHEMAS.get(task["type"])
+    if not schema:
+        return None
+    for param in schema["required"]:
+        if task["parameters"].get(param) is None:
+            return {
+                "status":   "question",
+                "question": schema["questions"][param],
+                "missing":  param,
+                "intent":   {"type": task["type"], "parameters": dict(task["parameters"])},
+            }
+    return None
+
+
+def generate_component(component_type: str, params: dict):
+    """Central generation router — dispatches to the correct CAD backend."""
+    if not is_cadquery_available():
+        return None
+    if component_type == "gear":
+        from components.gear.gear_cad import generate_component as _gen
+        return _gen(params)
+    if component_type == "shaft":
+        from components.shaft.shaft_cad import generate_component as _gen
+        return _gen(params)
+    if component_type == "bolt":
+        from components.bolt.bolt_cad import generate_component as _gen
+        return _gen(params)
+    if component_type == "bearing":
+        from components.bearing.bearing_cad import generate_component as _gen
+        return _gen(params)
+    if component_type == "flange":
+        from components.flange.flange_cad import generate_component as _gen
+        return _gen(params)
+    if component_type == "plate":
+        from components.plate.plate_cad import generate_component as _gen
+        return _gen(params)
+    handler = COMPONENT_REGISTRY.get(component_type)
+    if handler:
+        return handler.generate(params)
+    return None
+
+
+def process_prompt(prompt: str, state: dict) -> dict:
+    """
+    Deterministic conversation engine — zero LLM for flow control.
+
+    Flow:
+      1. Detect component type (keyword match)
+      2. Extract parameters (regex)
+      3. Ask for next missing required parameter one at a time
+      4. When complete → validate then signal generation
+
+    Returns one of:
+      {"status": "question", "question": str, "missing": str, "intent": dict}
+      {"status": "generate", "task": dict}
+      {"status": "error",    "message": str}
+    """
+    from core.state_manager import (
+        get_current_task, set_current_task, update_current_task_params,
+    )
+    from core.component_registry import CONVERSATION_SCHEMAS
+    from core.param_handler import apply_defaults, validate_params
+
+    task = get_current_task(state)
+
+    # STEP 1 — detect component type
+    if task is None or task.get("type") is None:
+        comp_type = detect_component_type(prompt)
+        if not comp_type:
+            return {
+                "status":  "error",
+                "message": (
+                    "I didn't recognise a component type. "
+                    "Try: gear, shaft, bolt, bearing, flange, or gearbox."
+                ),
+            }
+        set_current_task(state, comp_type, status="incomplete")
+        task = get_current_task(state)
+
+    # STEP 2 — extract and accumulate parameters
+    extracted = extract_parameters(prompt)
+    
+    # Special handling for gear: map thickness to face_width
+    if task.get("type") == "gear" and "thickness" in extracted:
+        extracted["face_width"] = extracted.pop("thickness")
+
+    # Map a bare single number onto the next missing required field
+    bare = extracted.pop("_bare", None)
+    if bare is not None:
+        schema = CONVERSATION_SCHEMAS.get(task["type"], {})
+        for param in schema.get("required", []):
+            if task["parameters"].get(param) is None:
+                # Convert to int only for teeth parameter
+                extracted[param] = int(bare) if param == "teeth" else bare
+                break
+
+    update_current_task_params(state, extracted)
+    task = get_current_task(state)
+
+    # STEP 3 — ask for next missing parameter
+    question = get_next_question(task)
+    if question:
+        return question
+
+    # STEP 4 — all parameters present — validate then signal generation
+    try:
+        final_params = apply_defaults(task["type"], task["parameters"])
+    except (KeyError, TypeError) as exc:
+        return {"status": "error", "message": f"Parameter error: {exc}"}
+
+    error = validate_params(task["type"], final_params)
+    if error:
+        return {"status": "error", "message": f"Validation failed: {error}"}
+
+    task["parameters"] = final_params
+    task["status"] = "complete"
+    return {"status": "generate", "task": task}
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +415,7 @@ _REQUIRED_FIELDS: dict = {
     "bolt":     ["diameter", "length", "thread_type", "pitch"],
     "flange":   ["diameter", "thickness"],
     "plate":    ["length", "width"],
-    "nut":      ["diameter"],
+    "nut":      ["diameter", "thread_type", "pitch"],
     "bearing":  ["inner_diameter", "outer_diameter", "width"],
     "coupling": ["length", "diameter"],
     "bracket":  ["length", "width", "height"],
@@ -245,6 +447,7 @@ _GUIDANCE: dict = {
 }
 
 _TASK_REQUIRED_FIELDS: dict = {
+    **{name: handler.required for name, handler in COMPONENT_REGISTRY.items()},
     **{name: schema["required"] for name, schema in COMPONENT_SCHEMAS.items()},
     # Gear-pair remains a relationship task built from two gear schemas.
     "gear_pair": ["module", "teeth_1", "teeth_2"],
@@ -282,6 +485,8 @@ _PARAM_ALIASES = {
     "outer": "outer_diameter",
     "pitch": "pitch",
     "thread": "thread_type",
+    "thread_type": "thread_type",
+    "wall_thickness": "wall_thickness",
 }
 
 
@@ -316,7 +521,7 @@ def _extract_task_parameters(prompt: str, task_type: str = None) -> dict:
 
     for name, value in re.findall(
         r"(module|teeth|tooth|length|long|diameter|dia|width|height|"
-        r"thickness|thick|radius|inner|outer|pitch)\s*(?:of|:|=)?\s*"
+        r"thickness|thick|radius|inner|outer|pitch|wall_thickness)\s*(?:of|:|=)?\s*"
         r"(\d+(?:\.\d+)?)",
         p,
     ):
@@ -353,7 +558,7 @@ def _extract_task_parameters(prompt: str, task_type: str = None) -> dict:
         params["teeth"] = teeth_values[0]
 
     thread_match = re.search(r"\b(M|UNC|UNF)\s*(\d+(?:\.\d+)?)?\b", prompt or "", re.IGNORECASE)
-    if thread_match and task_type == "bolt":
+    if thread_match and task_type in ("bolt", "nut"):
         params["thread_type"] = thread_match.group(1).upper()
         if thread_match.group(2) and "diameter" not in params:
             params["diameter"] = float(thread_match.group(2))
@@ -368,13 +573,15 @@ def _extract_task_parameters(prompt: str, task_type: str = None) -> dict:
         params["teeth"] = int(params["teeth"])
     if task_type == "cylinder" and "diameter" in params and "radius" not in params:
         params["radius"] = float(params["diameter"]) / 2.0
-    if task_type == "bolt" and "thread_type" not in params and "metric" in p:
+    if task_type in ("bolt", "nut") and "thread_type" not in params and "metric" in p:
         params["thread_type"] = "M"
     return params
 
 
 def _map_bare_numbers_to_missing(prompt: str, missing: list, extracted: dict) -> dict:
     """Map terse answers like '2 and 30' onto the active missing fields."""
+    if extracted:
+        return {}
     numbers = [float(v) for v in re.findall(r"\b\d+(?:\.\d+)?\b", prompt or "")]
     additions = {}
     open_fields = [field for field in missing if field not in extracted]
@@ -448,6 +655,57 @@ def _component_from_task(task: dict) -> dict:
         "relationships": [],
         "metadata": {"intent_type": task_type, "generation_path": "deterministic"},
     }
+
+
+def _append_generated_to_state(state: dict, plan: dict, prompt: str) -> dict:
+    """Append a newly completed component task to an existing design state."""
+    existing_components = list(state.get("components", []))
+    existing_relationships = list(state.get("relationships", []))
+    used_ids = {c.get("id") for c in existing_components}
+    type_counts = {}
+    for comp in existing_components:
+        ctype = comp.get("type", "component")
+        type_counts[ctype] = type_counts.get(ctype, 0) + 1
+
+    new_components = []
+    id_map = {}
+    for comp in plan.get("components", []):
+        clean = dict(comp)
+        ctype = clean.get("type", "component")
+        cid = clean.get("id") or f"{ctype}_1"
+        if cid in used_ids:
+            type_counts[ctype] = type_counts.get(ctype, 0) + 1
+            cid = f"{ctype}_{type_counts[ctype]}"
+        used_ids.add(cid)
+        id_map[clean.get("id")] = cid
+        clean["id"] = cid
+        new_components.append(clean)
+
+    new_relationships = []
+    for rel in plan.get("relationships", []):
+        clean_rel = dict(rel)
+        if clean_rel.get("from_id") in id_map:
+            clean_rel["from_id"] = id_map[clean_rel["from_id"]]
+        if clean_rel.get("to_id") in id_map:
+            clean_rel["to_id"] = id_map[clean_rel["to_id"]]
+        new_relationships.append(clean_rel)
+
+    text = (prompt or "").lower()
+    if ("shaft" in text or "axle" in text) and any(w in text for w in ("on", "onto", "to", "mounted")):
+        shaft = next((c for c in existing_components if c.get("type") == "shaft"), None)
+        gear = next((c for c in new_components if c.get("type") == "gear"), None)
+        if shaft and gear:
+            new_relationships.append({
+                "type": "concentric",
+                "from_id": gear["id"],
+                "to_id": shaft["id"],
+            })
+
+    merged = dict(plan)
+    merged["components"] = existing_components + new_components
+    merged["relationships"] = existing_relationships + new_relationships
+    merged.setdefault("metadata", {})["action"] = "add"
+    return merged
 
 
 def _validate_generation_result(plan: dict, task: dict = None) -> tuple:
@@ -581,7 +839,7 @@ def run_agentic_pipeline(
     """Run strict CAD pipeline: intent detection -> parameter completion -> generation."""
     log("system", f"Incoming prompt: '{prompt_text}' [mode={generation_mode}]")
 
-    from core.llm_client import MissingParametersError
+    from core.llm_client import MissingParametersError, OpenAIConfigurationError
     from core.state_manager import (
         empty_state, get_current_task, set_current_task,
         update_current_task_params, set_current_task_status,
@@ -595,136 +853,69 @@ def run_agentic_pipeline(
     ai_relationships: list = []
 
     try:
-        # STAGE 1 — Intent detection
-        active_task = get_current_task(state)
-        if pending_parameters and last_failed_intent and not active_task:
-            task_type = last_failed_intent.get("type", "component")
-            set_current_task(
-                state,
-                task_type,
-                {k: v for k, v in last_failed_intent.items() if k not in ("id", "type")},
-                missing=pending_parameters,
-                status="incomplete",
-            )
-            active_task = get_current_task(state)
+        # ── Deterministic conversation engine (no LLM for flow control) ──────
+        conv_result = process_prompt(effective_prompt, state)
 
-        if clarification_choice:
-            task_type = _detect_task_type(effective_prompt, clarification_choice)
-            if active_task and active_task.get("type") == "gear" and task_type is None:
-                task_type = "gear"
-            if task_type:
-                set_current_task(
-                    state,
-                    task_type,
-                    active_task.get("parameters", {}) if active_task else {},
-                    status="incomplete",
+        if conv_result["status"] == "question":
+            return conv_result
+
+        if conv_result["status"] == "error" and not state.get("components"):
+            return conv_result
+
+        if conv_result["status"] == "generate":
+            active_task = get_current_task(state)
+            task_type   = active_task.get("type")
+            params      = active_task.get("parameters", {})
+
+            # Gearbox: always use the synthesizer
+            if task_type == "gearbox":
+                generation_mode = "realistic"
+                log("planner", "generation_path=synthesizer intent=gearbox")
+                from core.gearbox_synthesizer import synthesize_gearbox
+                from core.design_intelligence import validate_cad_plan
+                ai_plan = synthesize_gearbox(
+                    target_ratio=float(params["target_ratio"]),
+                    input_speed_rpm=float(params.get("input_speed_rpm", 1500.0)),
+                    input_torque=float(params.get("input_torque", 1.0)),
+                    max_stages=int(params.get("max_stages", 3)),
+                    max_gear_teeth=int(params.get("max_gear_teeth", 120)),
                 )
-                active_task = get_current_task(state)
-            log("planner", f"intent_detected={task_type or 'unknown'} source=clarification")
+                ai_plan.setdefault("metadata", {})["flow_type"] = "gearbox"
+                ai_plan["relationships"] = _normalise_relationships(
+                    ai_plan.get("relationships", [])
+                )
+                ai_plan, eng_warns = validate_cad_plan(ai_plan)
+                if eng_warns:
+                    ai_plan.setdefault("metadata", {})["engineering_warnings"] = eng_warns
+                plan_graph = ai_plan.get("components", [])
 
-        if not active_task:
-            task_type = _detect_task_type(effective_prompt)
-            if task_type:
-                set_current_task(state, task_type, status="incomplete")
-                active_task = get_current_task(state)
             else:
-                is_ambig, ambig_type, ambig_options = _is_ambiguous(effective_prompt)
-                if is_ambig:
-                    set_current_task(state, ambig_type, status="incomplete")
-                    log("planner", f"intent_detected={ambig_type} status=clarification")
-                    return {
-                        "status": "clarification",
-                        "type": ambig_type,
-                        "options": ambig_options,
-                        "message": f"What kind of **{ambig_type}** would you like to create?",
-                    }
-            log("planner", f"intent_detected={task_type or 'llm_delta_or_plan'}")
-        else:
-            log("planner", f"intent_detected={active_task.get('type')} source=current_task")
-
-        # Gearbox hard-lock remains deterministic, but asks before generation.
-        if active_task and active_task.get("type") == "gearbox":
-            gb_params = _parse_gearbox_params(effective_prompt)
-            active_task["parameters"].update({k: v for k, v in gb_params.items() if v is not None})
-            if active_task["parameters"].get("target_ratio") is None:
-                active_task["missing"] = ["target_ratio"]
-                active_task["status"] = "incomplete"
-                return {
-                    "status": "question",
-                    "question": "What target ratio should the gearbox achieve? For example: 4:1.",
-                    "missing": ["target_ratio"],
-                    "intent": {"type": "gearbox", "parameters": active_task["parameters"]},
-                }
-            set_current_task_status(state, "complete")
-            log("planner", f"parameters_extracted={active_task['parameters']}")
-
-            from core.gearbox_synthesizer import synthesize_gearbox
-            from core.design_intelligence import validate_cad_plan
-            params = active_task["parameters"]
-            generation_mode = "realistic"
-            log("planner", "generation_path=synthesizer intent=gearbox")
-            ai_plan = synthesize_gearbox(
-                target_ratio=float(params["target_ratio"]),
-                input_speed_rpm=float(params.get("input_speed_rpm", 1500.0)),
-                input_torque=float(params.get("input_torque", 1.0)),
-                max_stages=int(params.get("max_stages", 3)),
-                max_gear_teeth=int(params.get("max_gear_teeth", 120)),
-            )
-            ai_plan.setdefault("metadata", {})["flow_type"] = "gearbox"
-            ai_plan["relationships"] = _normalise_relationships(ai_plan.get("relationships", []))
-            ai_plan, eng_warns = validate_cad_plan(ai_plan)
-            if eng_warns:
-                ai_plan.setdefault("metadata", {})["engineering_warnings"] = eng_warns
-            plan_graph = ai_plan.get("components", [])
-
-        elif active_task and active_task.get("type") in _TASK_REQUIRED_FIELDS:
-            # STAGE 2 — Parameter completion
-            current_missing = (
-                active_task.get("missing")
-                or _missing_for_task(active_task.get("type"), active_task.get("parameters", {}))
-            )
-            extracted = _extract_task_parameters(effective_prompt, active_task.get("type"))
-            extracted.update(_map_bare_numbers_to_missing(effective_prompt, current_missing, extracted))
-            update_current_task_params(state, extracted)
-            active_task = get_current_task(state)
-            missing = _missing_for_task(active_task.get("type"), active_task.get("parameters", {}))
-            log("planner", f"parameters_extracted={extracted} accumulated={active_task.get('parameters', {})}")
-            if missing:
-                set_current_task_missing(state, missing)
-                active_task = get_current_task(state)
-                return {
-                    "status": "question",
-                    "question": _question_for_missing(active_task.get("type"), missing),
-                    "missing": missing,
-                    "intent": {
-                        "type": active_task.get("type"),
-                        "parameters": active_task.get("parameters", {}),
-                        "missing": active_task.get("missing", []),
-                        "status": active_task.get("status", "incomplete"),
-                    },
-                }
-
-            # STAGE 3 — Generation
-            set_current_task_missing(state, [])
-            set_current_task_status(state, "complete")
-            log("planner", f"generation_path=deterministic intent={active_task.get('type')}")
-            ai_plan = _component_from_task(active_task)
-            ai_plan["relationships"] = _normalise_relationships(ai_plan.get("relationships", []))
-            plan_graph = ai_plan.get("components", [])
+                # Standard deterministic generation
+                log("planner", f"generation_path=deterministic intent={task_type}")
+                ai_plan = _component_from_task(active_task)
+                if state.get("components") and not _is_reset_request(effective_prompt):
+                    ai_plan = _append_generated_to_state(state, ai_plan, effective_prompt)
+                ai_plan["relationships"] = _normalise_relationships(
+                    ai_plan.get("relationships", [])
+                )
+                plan_graph = ai_plan.get("components", [])
 
         elif state.get("components") and not _is_reset_request(effective_prompt):
-            # Existing completed design: use a strict delta path, not fresh intent.
+            # Existing design, no new component intent → LLM delta
             from core.llm_client import generate_cad_delta
             from core.state_merger import apply_delta
             log("planner", "generation_path=llm_delta")
             delta = generate_cad_delta(
-                effective_prompt,
-                state,
+                effective_prompt, state,
                 conversation_history=conversation_history,
             )
-            delta["relationships"] = _normalise_relationships(delta.get("relationships", []))
-            if delta.get("components"):
-                delta["components"], val_warns = _validate_and_fill_components(delta["components"])
+            delta["relationships"] = _normalise_relationships(
+                delta.get("relationships", [])
+            )
+            if delta.get("action") == "add" and delta.get("components"):
+                delta["components"], val_warns = _validate_and_fill_components(
+                    delta["components"]
+                )
                 if val_warns:
                     log("planner", f"validation_notes={val_warns}")
             merged = apply_delta(state, delta)
@@ -733,33 +924,13 @@ def run_agentic_pipeline(
             ai_plan = {"metadata": state.get("metadata", {}), "relationships": ai_relationships}
 
         else:
-            # Last resort: LLM plan only when deterministic intent detection cannot classify.
-            log("planner", "generation_path=llm_plan")
-            try:
-                from core.llm_client import generate_cad_plan
-                from core.design_intelligence import validate_cad_plan
-                ai_plan = generate_cad_plan(
-                    effective_prompt,
-                    conversation_history=conversation_history,
-                )
-                raw_components = ai_plan.get("components", [])
-                cleaned, val_warns = _validate_and_fill_components(raw_components)
-                ai_plan["components"] = cleaned
-                ai_plan["relationships"] = _normalise_relationships(ai_plan.get("relationships", []))
-                if val_warns:
-                    ai_plan.setdefault("metadata", {}).setdefault("validation_notes", []).extend(val_warns)
-                ai_plan, eng_warns = validate_cad_plan(ai_plan)
-                if eng_warns:
-                    ai_plan.setdefault("metadata", {})["engineering_warnings"] = eng_warns
-                plan_graph = ai_plan.get("components", [])
-            except MissingParametersError as mpe:
-                comp_type = mpe.intent.get("type", "component")
-                return {
-                    "status": "question",
-                    "question": _question_for_missing(comp_type, mpe.missing_fields),
-                    "missing": mpe.missing_fields,
-                    "intent": mpe.intent,
-                }
+            return {
+                "status":  "error",
+                "message": (
+                    "I couldn't identify a component to generate. "
+                    "Try: 'design a gear', 'create a shaft', or 'add a bolt'."
+                ),
+            }
 
         # Post-generation validation before enrichment/compile.
         valid, validation_errors = _validate_generation_result(ai_plan, get_current_task(state))
@@ -770,7 +941,11 @@ def run_agentic_pipeline(
                 "errors": validation_errors,
             }
 
-        if get_current_task(state) and get_current_task(state).get("type") in COMPONENT_SCHEMAS:
+        if (
+            get_current_task(state)
+            and get_current_task(state).get("type") in COMPONENT_SCHEMAS
+            and get_current_task(state).get("type") != "gearbox"
+        ):
             generation_mode = "minimal"
 
         from assembly.mechanical_enricher import enrich_components
@@ -818,6 +993,11 @@ def run_agentic_pipeline(
             "missing": mpe.missing_fields,
             "intent": mpe.intent,
         }
+    except OpenAIConfigurationError:
+        return {
+            "status": "error",
+            "message": "OpenAI API key not configured",
+        }
     except Exception as exc:
         import traceback
         traceback.print_exc()
@@ -860,6 +1040,7 @@ def recompile_assembly(design_state: dict, prompt_text: str = "recompile") -> di
             }
 
         compiled_components = []
+        validation_errors = []
         for idx, node in enumerate(plan_graph):
             comp_type = node.get("type", "unknown")
             if comp_type == "unknown":
@@ -876,16 +1057,16 @@ def recompile_assembly(design_state: dict, prompt_text: str = "recompile") -> di
                 )
                 compiled_components.append({"node": node, "solid": result["solid"]})
             except Exception as route_err:
+                error_msg = str(route_err)
                 log("error",
-                    f"Routing failed for '{comp_type}' ({route_err}) — skipping.")
+                    f"Routing failed for '{comp_type}' ({error_msg}) — skipping.")
+                validation_errors.append(f"{comp_type}: {error_msg}")
 
         if not compiled_components:
+            error_detail = "\n".join(validation_errors) if validation_errors else "Check parameter values and try again."
             return {
                 "status":  "error",
-                "message": (
-                    "All components failed to generate. "
-                    "Check parameter values and try again."
-                ),
+                "message": f"All components failed to generate.\n{error_detail}",
             }
 
         # Debug compound export

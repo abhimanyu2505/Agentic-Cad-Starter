@@ -34,7 +34,7 @@ _DEFAULTS: Dict[str, Any] = {
     "history":             [],        # undo stack: list of snapshots
     "_pending_prompt":     None,      # internal: prompt from example-button click
     "openai_key_notice_shown": False, # show missing-key startup notice once
-    "theme_mode":          "light",   # UI theme: light | dark
+    "theme_mode":          "light",   # UI theme
 }
 
 

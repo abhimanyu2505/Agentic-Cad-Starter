@@ -30,6 +30,40 @@ class MissingParametersError(Exception):
         )
 
 
+class OpenAIConfigurationError(RuntimeError):
+    """Raised when the OpenAI client is needed but no API key is configured."""
+
+
+# ---------------------------------------------------------------------------
+# Environment helpers
+# ---------------------------------------------------------------------------
+
+def _load_local_env_once() -> None:
+    """Load OPENAI_API_KEY from repo-local .env files without adding a dependency."""
+    if os.getenv("OPENAI_API_KEY"):
+        return
+
+    here = os.path.abspath(os.path.dirname(__file__))
+    repo_root = os.path.abspath(os.path.join(here, "..", ".."))
+    candidates = [
+        os.path.join(repo_root, ".env"),
+        os.path.join(repo_root, "gear_engineering", ".env"),
+    ]
+
+    for env_path in candidates:
+        if not os.path.exists(env_path):
+            continue
+        with open(env_path, encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key.strip() == "OPENAI_API_KEY":
+                    os.environ["OPENAI_API_KEY"] = value.strip().strip('"').strip("'")
+                    return
+
+
 # ---------------------------------------------------------------------------
 # Pydantic component models
 # ---------------------------------------------------------------------------
@@ -44,40 +78,42 @@ class ComponentBase(BaseModel):
 
 class GearComponent(ComponentBase):
     type: str = "gear"
-    module: float = 2.0
-    teeth: int = 20
+    module: float
+    teeth: int
     pressure_angle: Optional[float] = 20.0
 
 
 class ShaftComponent(ComponentBase):
     type: str = "shaft"
-    length: float = 50.0
-    diameter: float = 10.0
+    length: float
+    diameter: float
 
 
 class BoltComponent(ComponentBase):
     type: str = "bolt"
-    diameter: float = 5.0
-    length: float = 20.0
-    thread_type: str = "M"
+    diameter: float
+    length: float
+    thread_type: str
     pitch: float
 
 
 class FlangeComponent(ComponentBase):
     type: str = "flange"
-    diameter: float = 50.0
-    thickness: float = 10.0
+    diameter: float
+    thickness: float
 
 
 class PlateComponent(ComponentBase):
     type: str = "plate"
-    length: float = 100.0
-    width: float = 100.0
+    length: float
+    width: float
 
 
 class NutComponent(ComponentBase):
     type: str = "nut"
-    diameter: float = 5.0
+    diameter: float
+    thread_type: str
+    pitch: float
 
 
 class BearingComponent(ComponentBase):
@@ -157,6 +193,7 @@ class CADPlan(BaseModel):
 
 def _get_client():
     """Return an initialised OpenAI client, raising clearly if unconfigured."""
+    _load_local_env_once()
     try:
         from openai import OpenAI
     except ImportError:
@@ -165,12 +202,13 @@ def _get_client():
         )
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is not set.")
+        raise OpenAIConfigurationError("OpenAI API key not configured")
     return OpenAI(api_key=api_key)
 
 
 def is_openai_configured() -> bool:
     """True when the OpenAI API key is available in the process environment."""
+    _load_local_env_once()
     return bool(os.getenv("OPENAI_API_KEY"))
 
 
